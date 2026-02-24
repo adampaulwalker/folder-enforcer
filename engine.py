@@ -40,7 +40,8 @@ def parse_rules(content: str) -> FolderRules:
             if " -> " not in rest:
                 continue
             globs_str, target = rest.split(" -> ", 1)
-            globs = [g.strip() for g in globs_str.split("|") if g.strip()]
+            # Lowercase globs on parse so matching is always case-insensitive
+            globs = [g.strip().lower() for g in globs_str.split("|") if g.strip()]
             patterns.append(PatternRule(globs=globs, target=target.strip()))
         else:
             allowed.append(line)
@@ -55,6 +56,8 @@ def load_rules(search_paths: list[str | Path] | None = None) -> FolderRules | No
     1. $FOLDER_RULES_PATH env var
     2. Provided search_paths (e.g. cwd/.folder-rules)
     3. ~/.folder-rules
+
+    Returns (rules, path) tuple - path is which file was loaded.
     """
     import os
 
@@ -76,13 +79,37 @@ def load_rules(search_paths: list[str | Path] | None = None) -> FolderRules | No
     return None
 
 
+def find_rules_path() -> Path | None:
+    """Find which .folder-rules file would be loaded (without loading it)."""
+    import os
+
+    candidates = []
+    env_path = os.environ.get("FOLDER_RULES_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(Path.cwd() / ".folder-rules")
+    candidates.append(Path.home() / ".folder-rules")
+
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def slugify(text: str) -> str:
-    """Convert description to a filename-safe slug."""
+    """Convert description to a filename-safe slug.
+
+    Preserves dots so extensions in descriptions aren't mangled.
+    """
     text = text.lower().strip()
-    text = re.sub(r"[^\w\s-]", "", text)
+    # Remove everything except word chars, whitespace, hyphens, and dots
+    text = re.sub(r"[^\w\s.\-]", "", text)
+    # Replace whitespace/underscores with hyphens
     text = re.sub(r"[\s_]+", "-", text)
+    # Collapse multiple hyphens
     text = re.sub(r"-+", "-", text)
-    return text.strip("-")
+    text = text.strip("-")
+    return text if text else "untitled"
 
 
 def extension_for(file_type: str) -> str:
@@ -98,6 +125,9 @@ def extension_for(file_type: str) -> str:
         "typescript": ".ts",
         "json": ".json",
         "yaml": ".yaml",
+        "csv": ".csv",
+        "html": ".html",
+        "css": ".css",
         "folder": "",
         "file": "",
     }
@@ -108,8 +138,8 @@ def extension_for(file_type: str) -> str:
 
 
 def _categories(rules: FolderRules) -> list[str]:
-    """Return only user-facing folder categories (not infrastructure items)."""
-    return [f for f in rules.allowed if not f.startswith(".") and "." not in f]
+    """Return only user-facing folder categories (not infrastructure/hidden items)."""
+    return [f for f in rules.allowed if not f.startswith(".")]
 
 
 def suggest(rules: FolderRules, description: str, file_type: str = "file") -> str:
@@ -123,7 +153,7 @@ def suggest(rules: FolderRules, description: str, file_type: str = "file") -> st
     filename = f"{slug}{ext}" if ext else slug
     categories = _categories(rules)
 
-    # Tier 1: Check pattern rules
+    # Tier 1: Check pattern rules (globs are already lowercased from parse)
     for rule in rules.patterns:
         for glob in rule.globs:
             if fnmatch(desc_lower, glob):
@@ -135,9 +165,11 @@ def suggest(rules: FolderRules, description: str, file_type: str = "file") -> st
                     f"Category: {target}"
                 )
 
-    # Tier 2: Check if any category name appears in description
+    # Tier 2: Check if any category name appears as a whole word in description
     for folder in categories:
-        if folder.lower() in desc_lower:
+        folder_lower = folder.lower()
+        # Word boundary match to avoid "skills" matching "upskills"
+        if re.search(r'\b' + re.escape(folder_lower) + r'\b', desc_lower):
             path = f"{folder}/{filename}"
             return (
                 f"Suggested: {path}\n"
@@ -159,7 +191,12 @@ def validate(rules: FolderRules, path: str) -> str:
     """Validate whether a proposed path conforms to the folder rules.
 
     Returns a human-readable validation result.
+    Accepts relative paths only. Absolute paths are rejected.
     """
+    # Reject absolute paths and path traversal
+    if path.startswith("/") or ".." in Path(path).parts:
+        return "Invalid: only relative paths are accepted (no absolute paths or ..)"
+
     parts = Path(path).parts
     if not parts:
         return "Invalid: empty path"

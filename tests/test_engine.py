@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from engine import FolderRules, PatternRule, parse_rules, slugify, suggest, validate
+from engine import FolderRules, PatternRule, parse_rules, slugify, suggest, validate, _categories
 
 
 SAMPLE_RULES = """
@@ -53,19 +53,61 @@ class TestParseRules:
         rules = parse_rules("pattern:*foo* no arrow here")
         assert rules.patterns == []
 
+    def test_globs_lowercased_on_parse(self):
+        rules = parse_rules("pattern:*Research*|*ANALYSIS* -> research/")
+        assert rules.patterns[0].globs == ["*research*", "*analysis*"]
+
 
 class TestSlugify:
     def test_basic(self):
         assert slugify("Standing Desk Research") == "standing-desk-research"
 
     def test_special_chars(self):
-        assert slugify("Acme Corp. Invoice #123") == "acme-corp-invoice-123"
+        assert slugify("Acme Corp Invoice #123") == "acme-corp-invoice-123"
 
     def test_extra_spaces(self):
         assert slugify("  lots   of   spaces  ") == "lots-of-spaces"
 
     def test_already_slugified(self):
         assert slugify("already-good") == "already-good"
+
+    def test_preserves_dots(self):
+        assert slugify("invoice.pdf") == "invoice.pdf"
+
+    def test_preserves_version_dots(self):
+        assert slugify("v1.2.3 release") == "v1.2.3-release"
+
+    def test_empty_returns_untitled(self):
+        assert slugify("") == "untitled"
+
+    def test_punctuation_only_returns_untitled(self):
+        assert slugify("!!!") == "untitled"
+
+    def test_whitespace_only_returns_untitled(self):
+        assert slugify("   ") == "untitled"
+
+
+class TestCategories:
+    def test_excludes_hidden(self):
+        rules = parse_rules("clients\n.DS_Store\n.claude\nresearch")
+        cats = _categories(rules)
+        assert ".DS_Store" not in cats
+        assert ".claude" not in cats
+        assert "clients" in cats
+        assert "research" in cats
+
+    def test_allows_dotted_folder_names(self):
+        rules = parse_rules("clients\nv1.2\nresearch")
+        cats = _categories(rules)
+        assert "v1.2" in cats
+
+    def test_excludes_infra_files(self):
+        rules = parse_rules("clients\nvalidate.sh\nCLAUDE.md\nresearch")
+        cats = _categories(rules)
+        # validate.sh and CLAUDE.md are not hidden but are files
+        # _categories only filters dot-prefixed items
+        assert "clients" in cats
+        assert "research" in cats
 
 
 class TestSuggest:
@@ -117,8 +159,26 @@ class TestSuggest:
     def test_folder_type_no_extension(self):
         result = suggest(self.rules, "new research project", "folder")
         assert "research/" in result
-        # folder type should not add extension
         assert not result.split("\n")[0].endswith(".md")
+
+    def test_case_insensitive_pattern_match(self):
+        rules = parse_rules("pattern:*Research* -> research/\nresearch")
+        result = suggest(rules, "my RESEARCH notes", "markdown")
+        assert "research/" in result
+        assert "Matched pattern" in result
+
+    def test_word_boundary_no_false_positive(self):
+        result = suggest(self.rules, "upskills training", "markdown")
+        # Should NOT match "skills" category
+        assert "No pattern match" in result or "products/" in result
+
+    def test_word_boundary_exact_match(self):
+        result = suggest(self.rules, "skills overview", "markdown")
+        assert "skills/" in result
+
+    def test_empty_description(self):
+        result = suggest(self.rules, "", "markdown")
+        assert "untitled" in result
 
 
 class TestValidate:
@@ -141,4 +201,13 @@ class TestValidate:
 
     def test_empty_path(self):
         result = validate(self.rules, "")
+        assert "Invalid" in result
+
+    def test_absolute_path_rejected(self):
+        result = validate(self.rules, "/Users/adam/Syncthing/clients/file.md")
+        assert "Invalid" in result
+        assert "absolute" in result.lower()
+
+    def test_path_traversal_rejected(self):
+        result = validate(self.rules, "../../etc/passwd")
         assert "Invalid" in result

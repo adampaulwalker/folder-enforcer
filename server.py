@@ -6,11 +6,9 @@ saving files to get the right destination path based on .folder-rules.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from mcp.server.fastmcp import FastMCP
 
-from engine import FolderRules, load_rules, suggest, validate
+from engine import find_rules_path, load_rules, suggest, validate
 
 mcp = FastMCP(
     "folder-enforcer",
@@ -22,33 +20,24 @@ mcp = FastMCP(
 )
 
 # Cache rules in memory (reloaded if file changes)
-_rules_cache: FolderRules | None = None
+_rules_cache = None
 _rules_mtime: float = 0
 
 
-def _get_rules() -> FolderRules | None:
+def _get_rules():
     """Load rules with simple file-change detection."""
     global _rules_cache, _rules_mtime
 
-    # Find the rules file
-    import os
+    path = find_rules_path()
+    if path is None:
+        return None
 
-    candidates = []
-    env_path = os.environ.get("FOLDER_RULES_PATH")
-    if env_path:
-        candidates.append(Path(env_path))
-    candidates.append(Path.cwd() / ".folder-rules")
-    candidates.append(Path.home() / ".folder-rules")
+    mtime = path.stat().st_mtime
+    if _rules_cache is None or mtime != _rules_mtime:
+        _rules_cache = load_rules([str(path)])
+        _rules_mtime = mtime
 
-    for path in candidates:
-        if path.is_file():
-            mtime = path.stat().st_mtime
-            if _rules_cache is None or mtime != _rules_mtime:
-                _rules_cache = load_rules([str(path)])
-                _rules_mtime = mtime
-            return _rules_cache
-
-    return None
+    return _rules_cache
 
 
 @mcp.tool()
