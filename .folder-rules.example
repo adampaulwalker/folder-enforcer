@@ -1,0 +1,30 @@
+# ~/Syncthing folder structure rules
+# Used by folder-enforcer MCP and enforce-folder-structure.sh
+
+# Allowed top-level folders
+clients
+hooks
+mcps
+personal
+products
+research
+skills
+
+# Infrastructure (allowed at root)
+validate.sh
+.mcp.json
+.claude
+.claude-flow
+.codex
+.DS_Store
+.playwright-mcp
+.stfolder
+.stignore
+CLAUDE.md
+
+# Pattern hints for suggest_location
+pattern:*research*|*analysis*|*comparison*|*review* -> research/
+pattern:*client*|*invoice*|*proposal*|*billing* -> clients/
+pattern:*product*|*app*|*tool*|*extension*|*bot*|*saas* -> products/
+pattern:*tax*|*finance*|*health*|*career*|*resume*|*portfolio*|*todo*|*plan* -> personal/
+pattern:*skill*|*hook*|*mcp* -> skills/
